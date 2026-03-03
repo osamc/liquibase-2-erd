@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Liquibase → ERD</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --error: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 2rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 480px;
+      width: 100%;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      color: var(--muted);
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 0.75rem;
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    input[type="file"]::file-selector-button {
+      margin-right: 0.75rem;
+      padding: 0.35rem 0.75rem;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button[type="submit"] {
+      width: 100%;
+      padding: 0.85rem 1.25rem;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button[type="submit"]:hover {
+      filter: brightness(1.1);
+    }
+    .flash {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      list-style: none;
+      padding-left: 1rem;
+    }
+    .flash.error { background: rgba(248,81,73,0.15); color: var(--error); border: 1px solid var(--error); }
+    .flash.success { background: rgba(63,185,80,0.15); color: var(--success); border: 1px solid var(--success); }
+    .flash.warning { background: rgba(210,153,34,0.15); color: #d29922; border: 1px solid #d29922; }
+    .hint {
+      font-size: 0.875rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Liquibase → ERD</h1>
+  <p class="subtitle">Upload a changelog, run it on Postgres, then view the schema as a draw.io diagram</p>
+
+  <div class="card">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="changelog">Liquibase changelog</label>
+        <input type="file" id="changelog" name="changelog" accept=".xml,.yaml,.yml" required>
+        <p class="hint">Root changelog file (.xml, .yaml, or .yml).</p>
+      </div>
+      <div class="form-group">
+        <label for="includes">Optional: included files</label>
+        <input type="file" id="includes" name="includes" accept=".xml,.yaml,.yml,.sql" multiple>
+        <p class="hint">If your changelog uses &lt;include file="..."&gt;, add those files here (same names as in the changelog).</p>
+      </div>
+      <button type="submit">Run Liquibase &amp; generate ERD</button>
+    </form>
+  </div>
+</body>
+</html>
