@@ -100,9 +100,10 @@ def get_schema(connection_params: dict) -> tuple[list[dict], list[dict]]:
         for r in cur.fetchall():
             pk_set.add((r["table_schema"], r["table_name"], r["column_name"]))
 
-        # Foreign keys
+        # Foreign keys (one row per column; we deduplicate by constraint for one edge per FK)
         cur.execute("""
             SELECT
+                tc.constraint_name,
                 tc.table_schema AS from_schema,
                 tc.table_name AS from_table,
                 kcu.column_name AS from_column,
@@ -134,18 +135,24 @@ def get_schema(connection_params: dict) -> tuple[list[dict], list[dict]]:
                 "columns": col_list,
             })
 
-        relationships = [
-            {
+        # One relationship per FK constraint (composite FKs = one edge, not one per column)
+        seen_constraints: set[tuple[str, str, str, str, str]] = set()
+        relationships = []
+        for r in fks:
+            if r["from_table"].lower() in LIQUIBASE_TABLES or r["to_table"].lower() in LIQUIBASE_TABLES:
+                continue
+            key = (r["constraint_name"], r["from_schema"], r["from_table"], r["to_schema"], r["to_table"])
+            if key in seen_constraints:
+                continue
+            seen_constraints.add(key)
+            relationships.append({
                 "from_schema": r["from_schema"],
                 "from_table": r["from_table"],
                 "from_column": r["from_column"],
                 "to_schema": r["to_schema"],
                 "to_table": r["to_table"],
                 "to_column": r["to_column"],
-            }
-            for r in fks
-            if r["from_table"].lower() not in LIQUIBASE_TABLES and r["to_table"].lower() not in LIQUIBASE_TABLES
-        ]
+            })
         return tables, relationships
     finally:
         conn.close()
@@ -161,6 +168,65 @@ def _escape_xml(s: str) -> str:
     )
 
 
+def _compute_hierarchical_layout(
+    tables: list[dict], relationships: list[dict]
+) -> tuple[dict[tuple[str, str], tuple[int, int]], list[dict]]:
+    """
+    Place tables by dependency: referenced tables (parents) left, referencing (children) right.
+    Returns (table_positions, tables_ordered) to minimize edge crossings.
+    """
+    col_width = 220
+    row_height = 320
+    gap_x = 60
+    gap_y = 40
+    base_x = 40
+    base_y = 40
+
+    table_keys = {(t["schema"], t["name"]) for t in tables}
+    child_to_parents: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+    for rel in relationships:
+        child = (rel["from_schema"], rel["from_table"])
+        parent = (rel["to_schema"], rel["to_table"])
+        if child in table_keys and parent in table_keys:
+            child_to_parents[child].append(parent)
+
+    # Level 0 = never a child (no outgoing FK); level k = 1 + max(parent levels)
+    levels = {t: 0 for t in table_keys}
+    for _ in range(len(table_keys) + 1):
+        changed = False
+        for t in table_keys:
+            if t not in child_to_parents:
+                continue
+            new_level = 1 + max(levels[p] for p in child_to_parents[t])
+            if new_level > levels[t]:
+                levels[t] = new_level
+                changed = True
+        if not changed:
+            break
+
+    # Group by level, sort within level by name
+    by_level: dict[int, list[dict]] = defaultdict(list)
+    for t in tables:
+        key = (t["schema"], t["name"])
+        by_level[levels[key]].append(t)
+    for level in by_level:
+        by_level[level].sort(key=lambda t: (t["name"].lower(), t["schema"]))
+
+    sorted_levels = sorted(by_level.keys())
+    table_positions: dict[tuple[str, str], tuple[int, int]] = {}
+    tables_ordered: list[dict] = []
+    for level in sorted_levels:
+        for row_idx, t in enumerate(by_level[level]):
+            key = (t["schema"], t["name"])
+            table_positions[key] = (
+                base_x + level * (col_width + gap_x),
+                base_y + row_idx * (row_height + gap_y),
+            )
+            tables_ordered.append(t)
+
+    return table_positions, tables_ordered
+
+
 def generate_drawio_xml(tables: list[dict], relationships: list[dict]) -> str:
     """
     Generate draw.io (mxfile) XML from tables and relationships.
@@ -169,17 +235,10 @@ def generate_drawio_xml(tables: list[dict], relationships: list[dict]) -> str:
     cell_id = 2  # 0 and 1 are root/parent
     table_ids: dict[tuple[str, str], str] = {}
 
-    # Layout: simple grid
+    # Hierarchical layout: parents left, children right to reduce edge crossings
     col_width = 220
     row_height = 320
-    cols_per_row = 4
-    table_positions: dict[tuple[str, str], tuple[int, int]] = {}
-    for i, t in enumerate(tables):
-        row, col = divmod(i, cols_per_row)
-        table_positions[(t["schema"], t["name"])] = (
-            40 + col * (col_width + 60),
-            40 + row * (row_height + 40),
-        )
+    table_positions, tables_ordered = _compute_hierarchical_layout(tables, relationships)
 
     def next_id() -> str:
         nonlocal cell_id
@@ -203,7 +262,7 @@ def generate_drawio_xml(tables: list[dict], relationships: list[dict]) -> str:
         "fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;verticalAlign=top;"
         "spacingLeft=4;spacingRight=4;fontStyle=1;whiteSpace=wrap;html=1;"
     )
-    for t in tables:
+    for t in tables_ordered:
         key = (t["schema"], t["name"])
         tid = f"table_{_sanitize_id(t['schema'])}_{_sanitize_id(t['name'])}"
         table_ids[key] = tid

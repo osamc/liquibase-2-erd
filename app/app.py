@@ -38,6 +38,29 @@ def get_db_params():
     }
 
 
+def clear_database() -> tuple[bool, str]:
+    """Drop and recreate the public schema so the next changelog runs on a clean DB."""
+    db = get_db_params()
+    try:
+        conn = psycopg2.connect(
+            host=db["host"],
+            port=db["port"],
+            dbname=db["dbname"],
+            user=db["user"],
+            password=db["password"],
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("DROP SCHEMA IF EXISTS public CASCADE;")
+        cur.execute("CREATE SCHEMA public;")
+        cur.execute("GRANT ALL ON SCHEMA public TO public;")
+        cur.close()
+        conn.close()
+        return True, "Database cleared."
+    except Exception as e:
+        return False, str(e)
+
+
 def run_liquibase(changelog_path: str, work_dir: str) -> tuple[bool, str]:
     """Run liquibase update. Returns (success, message)."""
     db = get_db_params()
@@ -86,6 +109,12 @@ def upload():
         return redirect(url_for("index"))
     if not (f.filename.endswith(".xml") or f.filename.endswith(".yaml") or f.filename.endswith(".yml")):
         flash("Please upload a Liquibase changelog (.xml, .yaml, .yml).", "error")
+        return redirect(url_for("index"))
+
+    # Clear existing schema so the ERD reflects only this changelog
+    ok_clear, msg_clear = clear_database()
+    if not ok_clear:
+        flash(f"Could not clear database: {msg_clear}", "error")
         return redirect(url_for("index"))
 
     with tempfile.TemporaryDirectory() as work_dir:
